@@ -1,60 +1,42 @@
 from scapy.all import sniff, IP, TCP
-from collections import defaultdict
-from datetime import datetime, timedelta
+from datetime import datetime
+import detector
 
-# ==============================
-# CONFIGURATION
-# ==============================
-SYN_THRESHOLD = 50          # SYN packets
-TIME_WINDOW = 10            # seconds
-
-# ==============================
-# DATA STRUCTURES
-# ==============================
-syn_tracker = defaultdict(list)
-
-# ==============================
-# PACKET PROCESSOR
-# ==============================
 def process_packet(packet):
-    if IP in packet and TCP in packet:
-        src_ip = packet[IP].src
-        dst_ip = packet[IP].dst
-        flags = packet[TCP].flags
+    if IP not in packet or TCP not in packet:
+        return
 
-        timestamp = datetime.now()
+    src_ip = packet[IP].src
+    dst_ip = packet[IP].dst
+    dst_port = packet[TCP].dport
+    flags = packet[TCP].flags
+    timestamp = datetime.now()
 
-        # SYN packet (S flag set, A flag not set)
-        if flags == "S":
-            syn_tracker[src_ip].append(timestamp)
+    alerts = []
 
-            # Remove old SYNs outside time window
-            syn_tracker[src_ip] = [
-                t for t in syn_tracker[src_ip]
-                if timestamp - t <= timedelta(seconds=TIME_WINDOW)
-            ]
+    alerts.append(detector.detect_blacklist(src_ip, dst_ip, dst_port))
+    alerts.append(detector.detect_syn_flood(src_ip, timestamp))
+    alerts.append(detector.detect_port_scan(src_ip, dst_port, timestamp))
+    alerts.append(detector.detect_failed_handshake(src_ip, flags, timestamp))
 
-            syn_count = len(syn_tracker[src_ip])
+    for alert in alerts:
+     if alert:
+        detector.log_alert(alert)
+        print("\n" + "=" * 60)
+        print(f"[ALERT] {alert['type']}")
+        for k, v in alert.items():
+            if k != "type":
+                print(f"{k}: {v}")
+        print("=" * 60 + "\n")
 
-            print(f"[{timestamp.strftime('%H:%M:%S')}] "
-                  f"SYN detected from {src_ip} -> {dst_ip} "
-                  f"(Count: {syn_count})")
 
-            # ALERT CONDITION
-            if syn_count >= SYN_THRESHOLD:
-                print("\n" + "!" * 60)
-                print(f"[ALERT] POSSIBLE SYN FLOOD ATTACK DETECTED")
-                print(f"Source IP: {src_ip}")
-                print(f"SYN packets in {TIME_WINDOW}s: {syn_count}")
-                print("!" * 60 + "\n")
+    print(f"[{timestamp.strftime('%H:%M:%S')}] "
+          f"{src_ip} -> {dst_ip}:{dst_port} | FLAGS={flags}")
 
 def start_sniffing():
-    print("[*] Starting packet sniffing with SYN flood detection...")
-    print("[*] Press CTRL+C to stop.\n")
+    print("[*] Network IDS running (Modular Architecture)")
+    print("[*] Press CTRL+C to stop\n")
     sniff(filter="tcp", prn=process_packet, store=False)
 
-# ==============================
-# MAIN
-# ==============================
 if __name__ == "__main__":
     start_sniffing()
